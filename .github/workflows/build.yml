@@ -1,0 +1,258 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Write app files
+        run: |
+          mkdir -p src/main/java/com/cleanfeed src/main/assets
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = 'CleanFeed'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2'
+          }
+          android {
+              namespace 'com.cleanfeed'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'com.cleanfeed'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          EOF
+
+          cat > src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:label="Clean Feed"
+                  android:allowBackup="false"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > src/main/java/com/cleanfeed/MainActivity.java <<'EOF'
+          package com.cleanfeed;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.view.Gravity;
+          import android.webkit.CookieManager;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import java.io.ByteArrayOutputStream;
+          import java.io.InputStream;
+
+          public class MainActivity extends Activity {
+              private WebView web;
+              private LinearLayout home;
+              private String js = "";
+              private boolean inSite = false;
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  try {
+                      InputStream is = getAssets().open("clean.js");
+                      ByteArrayOutputStream o = new ByteArrayOutputStream();
+                      byte[] buf = new byte[4096];
+                      int n;
+                      while ((n = is.read(buf)) > 0) o.write(buf, 0, n);
+                      is.close();
+                      js = o.toString("UTF-8");
+                  } catch (Exception e) {
+                  }
+
+                  home = new LinearLayout(this);
+                  home.setOrientation(LinearLayout.VERTICAL);
+                  home.setGravity(Gravity.CENTER);
+                  home.setPadding(64, 64, 64, 64);
+                  TextView t = new TextView(this);
+                  t.setText("Clean Feed");
+                  t.setTextSize(30);
+                  t.setGravity(Gravity.CENTER);
+                  home.addView(t);
+                  home.addView(makeButton("YouTube", "https://m.youtube.com/"));
+                  home.addView(makeButton("Instagram", "https://www.instagram.com/"));
+
+                  web = new WebView(this);
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  CookieManager.getInstance().setAcceptCookie(true);
+                  CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+                  web.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
+                          v.evaluateJavascript(js, null);
+                      }
+
+                      @Override
+                      public void onPageFinished(WebView v, String u) {
+                          v.evaluateJavascript(js, null);
+                      }
+
+                      @Override
+                      public void doUpdateVisitedHistory(WebView v, String u, boolean r) {
+                          v.evaluateJavascript(js, null);
+                      }
+                  });
+                  setContentView(home);
+              }
+
+              private Button makeButton(String label, final String url) {
+                  Button bt = new Button(this);
+                  bt.setText(label);
+                  bt.setOnClickListener(v -> openSite(url));
+                  return bt;
+              }
+
+              private void openSite(String url) {
+                  inSite = true;
+                  setContentView(web);
+                  web.loadUrl(url);
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (inSite && web.canGoBack()) {
+                      web.goBack();
+                  } else if (inSite) {
+                      inSite = false;
+                      setContentView(home);
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+          }
+          EOF
+
+          cat > src/main/assets/clean.js <<'EOF'
+          (function () {
+            if (window.__cf) return;
+            window.__cf = true;
+
+            var host = location.hostname;
+            var yt = host.indexOf('youtube.com') > -1;
+            var ig = host.indexOf('instagram.com') > -1;
+
+            function hide(el) {
+              if (el && el.style) el.style.setProperty('display', 'none', 'important');
+            }
+
+            function hideUp(el, sel) {
+              var c = el.closest(sel);
+              hide(c || el);
+            }
+
+            var YT_ITEMS = 'ytm-pivot-bar-item-renderer,ytm-video-with-context-renderer,' +
+              'ytm-compact-video-renderer,ytm-rich-item-renderer,ytd-rich-item-renderer,' +
+              'ytd-video-renderer,ytd-guide-entry-renderer,ytd-mini-guide-entry-renderer,' +
+              'ytm-shorts-lockup-view-model,ytm-shorts-lockup-view-model-v2,ytm-reel-item-renderer';
+
+            var YT_SHELVES = 'ytm-reel-shelf-renderer,ytd-reel-shelf-renderer,' +
+              'ytm-shorts-lockup-view-model,ytm-shorts-lockup-view-model-v2';
+
+            function clean() {
+              try {
+                var p = location.pathname;
+
+                if (yt) {
+                  if (p.indexOf('/shorts') === 0) { location.replace('/'); return; }
+
+                  document.querySelectorAll('a[href^="/shorts"]').forEach(function (a) {
+                    hideUp(a, YT_ITEMS);
+                  });
+                  document.querySelectorAll(YT_SHELVES).forEach(function (s) {
+                    hideUp(s, 'ytm-rich-section-renderer,ytd-rich-section-renderer');
+                  });
+                  document.querySelectorAll('ytm-pivot-bar-item-renderer,ytd-guide-entry-renderer,ytd-mini-guide-entry-renderer').forEach(function (e) {
+                    if (/^\s*shorts\s*$/i.test(e.textContent || '')) hide(e);
+                  });
+                }
+
+                if (ig) {
+                  if (p.indexOf('/reels') === 0 || p.indexOf('/reel/') === 0) { location.replace('/'); return; }
+
+                  document.querySelectorAll('a[href*="/reels"]').forEach(function (a) {
+                    hideUp(a, 'li,[role="listitem"]');
+                  });
+                  document.querySelectorAll('a[href*="/reel/"]').forEach(function (a) {
+                    hideUp(a, 'article');
+                  });
+                }
+              } catch (e) {}
+            }
+
+            clean();
+            setInterval(clean, 600);
+            new MutationObserver(clean).observe(document.documentElement, { childList: true, subtree: true });
+          })();
+          EOF
+
+      - name: Build
+        run: gradle assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: cp build/outputs/apk/debug/*.apk CleanFeed.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Clean Feed v${{ github.run_number }}
+          files: CleanFeed.apk
